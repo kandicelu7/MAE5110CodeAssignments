@@ -3,5 +3,6 @@
 
 from . import pendulum
 from . import bouncingBall
+from . import rimlessWheel
 
-__all__ = ["pendulum", "bouncingBall"]
+__all__ = ["pendulum", "bouncingBall", "rimlessWheel"]
