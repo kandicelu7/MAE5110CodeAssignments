@@ -9,24 +9,23 @@ simulate_single_RoA = 0;  plot_single_RoA = 1   #state space RoA plot for given 
 plot_return_map = 1                             #1D return map plot
 estimate_floquet_multiplier = 1                 #rolling cycle floquet multiplier
 
-sweep_floquet_inclination = 0                   #sweep floquet mult. over inclinations
-sweep_floquet_spokes = 0                        #sweep floquet mult. over spoke #
+sweep_floquet_inclination = 1                   #sweep floquet mult. over inclinations
+sweep_floquet_spokes = 1                        #sweep floquet mult. over spoke #
 
 sweep_RoA_inclination = 0;  plot_RoA_inclination = 1     #sweep RoA over inclinations
 sweep_RoA_spokes = 0;       plot_RoA_spokes = 1          #sweep RoA over spoke #
 
-#Setup/parameters
-impact_threshold = 0.05 #when to switch to finer timestep
+#Setup
+impact_threshold = 0.05     #when to switch to finer timestep
 coarse_timestep = 1e-2; fine_timestep = 1e-4; floquet_timestep = 5e-6
 
-mass = 1; length = 1; gravity = 9.81 #wheel parameters
-spoke_number = 6
-inclination_angle = np.pi/18
-
 sim_time = 5.0
-initial_state = np.array([0, 1.5*np.pi, 0]) #[initial angle, initial velocity, impact counter = 0]
+initial_state = np.array([np.pi/6, 0, 0]) #[initial angle, initial velocity, impact counter = 0]
 
-
+#wheel parameters
+mass = 1; length = 1; gravity = 9.81
+spoke_number = 6
+inclination_angle = np.pi/10
 
 params = {"mass": mass, "length": length, "gravity": gravity, "spoke_number": spoke_number, "inclination_angle": inclination_angle}
 alpha = np.pi/spoke_number
@@ -65,10 +64,10 @@ if simulate_single_RoA:
     loop_count = 0
 
     print("Looping for single RoA plot")
-    for i in range(grid_points_RoA):
+    for i in range(grid_points_RoA): #loops velocities
         theta_dot0 = inital_velocities[i]
 
-        for j in range(grid_points_RoA):
+        for j in range(grid_points_RoA): #loops angles
             theta0 = inital_angles[j]
 
             initial_state_RoA = np.array([theta0, theta_dot0, 0])
@@ -76,8 +75,8 @@ if simulate_single_RoA:
             final_state, _ = model.full_integration(
                 model, initial_state_RoA, coarse_timestep, fine_timestep, impact_threshold, None, params, keep_history=False)
 
-            if abs(final_state[1]) > 0.1:
-                steady_state[i, j] = 1
+            if abs(final_state[1]) > 0.1:  #checks if rolling
+                steady_state[i, j] = 1     # 1 = rolling, 0 if stationary
 
             loop_count += 1
         print(loop_count, " out of ", grid_points_RoA**2, "states simulated")
@@ -107,9 +106,9 @@ if plot_single_RoA:
 
 if plot_return_map:
     _, _, poincare_tracker = model.full_integration(
-        model, initial_state, coarse_timestep, floquet_timestep, impact_threshold, sim_time, params, keep_history=True
-    )
-    poincare_tracker = np.array(poincare_tracker)
+        model, initial_state, coarse_timestep, floquet_timestep, impact_threshold, sim_time, params, keep_history=True)
+    
+    poincare_tracker = np.array(poincare_tracker) #array of velocities after impact
 
     poincare_x = poincare_tracker[:-1]
     poincare_y = poincare_tracker[1:]
@@ -133,25 +132,27 @@ if plot_return_map:
 
 if estimate_floquet_multiplier:
     fixed_point_velocity = model.find_fixed_point(params, coarse_timestep, floquet_timestep, impact_threshold, sim_time, initial_velocity=0.5)
-    perturbance = 0.01
+
+    perturbance = 0.01 #distrubance from steady state impact velocity
+
     floquet_multiplier = model.estimate_floquet_multiplier(params, coarse_timestep, floquet_timestep, impact_threshold, fixed_point_velocity, perturbance)
     print("Fixed point velocity:", fixed_point_velocity)
     print("Floquet Multiplier:", floquet_multiplier)
 
 if sweep_floquet_inclination:
     inclination_values = np.linspace(0, np.pi/2, 21) #toggle sweep range/resolution
-    
+
     floquet_sweep_inclination = []
     perturbance = 0.01
-    
+
     print("Sweeping inclinations for Floquet multiplier")
 
-    for k, inclination in enumerate(inclination_values):
+    for k, inclination in enumerate(inclination_values): #sweep slope angles
         params["inclination_angle"] = inclination
 
         fixed_point_velocity = model.find_fixed_point(params, coarse_timestep, floquet_timestep, impact_threshold, sim_time = None, initial_velocity=np.pi)
 
-        if np.isnan(fixed_point_velocity):
+        if np.isnan(fixed_point_velocity): #if steady rolling is never reached
             multiplier_inclination = np.nan
         else:
             multiplier_inclination = model.estimate_floquet_multiplier(params, coarse_timestep, floquet_timestep, impact_threshold, fixed_point_velocity, perturbance)
@@ -174,18 +175,17 @@ if sweep_floquet_inclination:
     plt.savefig("figures/slope_sweep_floquet_map_plot.png")
 
 if sweep_floquet_spokes:
-    spoke_values = [6, 7, 8, 9, 10, 11, 12] #adjust spokes counts to sweep over
+    spoke_values = [6, 7, 8, 9, 10, 11, 12] #spokes counts to sweep over
 
     floquet_spoke_sweep = []
     perturbance = 0.01
 
-    for l, spoke in enumerate(spoke_values):
+    for l, spoke in enumerate(spoke_values): #sweeps over spoeks
         params["spoke_number"] = spoke
 
         fixed_point_velocity = model.find_fixed_point(params, coarse_timestep, floquet_timestep, impact_threshold, None, initial_velocity=0.3)
 
-        if np.isnan(fixed_point_velocity):
-            print(f"l={l}, spoke={spoke:.1f}: no steady rolling found")
+        if np.isnan(fixed_point_velocity): #no steady rolling reached
             floquet_spoke_sweep.append(np.nan)
             multiplier_spokes = np.nan
         else:
@@ -213,14 +213,13 @@ if sweep_RoA_inclination:
 
     RoA_percent_rolling = []
 
-    for k, inclination in enumerate(inclination_values):
+    for k, inclination in enumerate(inclination_values): #sweep through slopes
         print("Simulating for inclination =", np.degrees(inclination_values[k]), "degrees")
 
         params["inclination_angle"] = inclination
 
         RoA_percent_rolling.append(
-            model.estimate_RoA_fraction(params, coarse_timestep, fine_timestep, impact_threshold, None, grid_points=25)
-        )
+            model.estimate_RoA_fraction(params, coarse_timestep, fine_timestep, impact_threshold, None, grid_points=25))
 
     RoA_percent_rolling = np.array(RoA_percent_rolling)
 
@@ -246,7 +245,7 @@ if sweep_RoA_spokes:
 
     RoA_percent_rolling_spokes = []
 
-    for m, spoke in enumerate(spoke_values):
+    for m, spoke in enumerate(spoke_values): #sweeps over spoke counts
         print("Simulating for spoke count =", spoke)
 
         params["spoke_number"] = spoke

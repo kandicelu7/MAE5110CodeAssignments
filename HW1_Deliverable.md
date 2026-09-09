@@ -1,6 +1,8 @@
 How to run code:
 All adjustable parameters/setting should at the top of rimlessWheel_main_file.py and can be adjusted to simulate the desired system. Toggling 0/1 at the top of the script allows you to pic what sections to run/plots to create. All the RoA sections take a while to run, so existing data is saved and plots can be created without re-running. Bounds and resolution for sweeping sections are adjusted within each section.
 
+
+
 rimlessWheel_main_file.py: main file to adjust and run everything from
 models/rimlessWheel: contains functions for dynamics, full integration, and other analysis
 integrators/rk4: function for integrating one step
