@@ -10,7 +10,7 @@ plot_return_map = 1                             #1D return map plot
 estimate_floquet_multiplier = 1                 #rolling cycle floquet multiplier
 
 sweep_floquet_inclination = 1                   #sweep floquet mult. over inclinations
-sweep_floquet_spokes = 1                        #sweep floquet mult. over spoke #
+sweep_floquet_spokes = 0                        #sweep floquet mult. over spoke #
 
 sweep_RoA_inclination = 0;  plot_RoA_inclination = 1     #sweep RoA over inclinations
 sweep_RoA_spokes = 0;       plot_RoA_spokes = 1          #sweep RoA over spoke #
@@ -84,12 +84,16 @@ if simulate_single_RoA:
     np.savez("data/roa_plot.npz",
              steady_state=steady_state,
              inital_angles=inital_angles,
-             inital_velocities=inital_velocities)
+             inital_velocities=inital_velocities,
+             spoke_number=spoke_number,
+             inclination_angle=inclination_angle)
 if plot_single_RoA:
     data = np.load("data/roa_plot.npz")
     steady_state = data["steady_state"]
     inital_angles = data["inital_angles"]
     inital_velocities = data["inital_velocities"]
+    spoke_number = int(data["spoke_number"])
+    inclination_angle = float(data["inclination_angle"])
 
     cmap = ListedColormap(["#000000", "#ffffff"])
 
@@ -105,27 +109,35 @@ if plot_single_RoA:
     plt.savefig("figures/single_roa_plot.png")
 
 if plot_return_map:
-    _, _, poincare_tracker = model.full_integration(
-        model, initial_state, coarse_timestep, floquet_timestep, impact_threshold, sim_time, params, keep_history=True)
+    velocity_range = np.linspace(1,2,50)
     
-    poincare_tracker = np.array(poincare_tracker) #array of velocities after impact
+    poincare_x = []
+    poincare_y = []
+    
+    for v0 in velocity_range:
+        print(v0)
+        initial_state_v = ([inclination_angle, v0, 0])
 
-    poincare_x = poincare_tracker[:-1]
-    poincare_y = poincare_tracker[1:]
+        _, _, poincare_tracker = model.full_integration(model, initial_state_v, coarse_timestep, fine_timestep, impact_threshold, None, params, keep_history=True)
 
-    print("Steady state post-impact velocity:", np.mean(poincare_tracker[-5:]), "rad/s")
+        if len(poincare_tracker) < 2: #no impacts
+            continue
+
+        poincare_x.append(poincare_tracker[1])
+        poincare_y.append(poincare_tracker[2])
+
+    print("Steady state post-impact velocity:", poincare_tracker[-1:], "rad/s")
 
     plt.figure(4)
     ax = plt.gca()
     ax.set_axisbelow(True)
     plt.grid(True)
     plt.scatter(poincare_x, poincare_y)
-    plt.scatter(np.mean(poincare_tracker[-5:]), np.mean(poincare_tracker[-5:]), label="fixed point")
+    plt.scatter(poincare_tracker[-1:], poincare_tracker[-1:], label="fixed point")
     plt.plot(poincare_x, poincare_x, linewidth=0.5, label="identity line")
     plt.xlabel("x_k")
     plt.ylabel("x_k+1")
-    plt.title(f"Poincare Section ({spoke_number} spokes, {np.degrees(inclination_angle):.1f} deg incline)\n"
-              f"IC: θ={np.degrees(initial_state[0]):.1f} deg, θ̇={np.degrees(initial_state[1]):.1f} deg/s")
+    plt.title(f"Poincare Section ({spoke_number} spokes, {np.degrees(inclination_angle):.1f} deg incline)\n")
     plt.tight_layout()
     plt.legend()
     plt.savefig("figures/return_map_plot.png")
@@ -223,11 +235,15 @@ if sweep_RoA_inclination:
 
     RoA_percent_rolling = np.array(RoA_percent_rolling)
 
-    np.savez("data/inclination_roa_sweep.npz", inclination_values=inclination_values, RoA_percent_rolling=RoA_percent_rolling)
+    np.savez("data/inclination_roa_sweep.npz",
+            inclination_values=inclination_values,
+            RoA_percent_rolling=RoA_percent_rolling,
+            spoke_number=spoke_number)
 if plot_RoA_inclination:
     data = np.load("data/inclination_roa_sweep.npz")
     inclination_values = data["inclination_values"]
     RoA_percent_rolling = data["RoA_percent_rolling"]
+    spoke_number = data["spoke_number"]
 
     plt.figure(9)
     ax = plt.gca()
@@ -257,11 +273,13 @@ if sweep_RoA_spokes:
     RoA_percent_rolling_spokes = np.array(RoA_percent_rolling_spokes)
 
     np.savez("data/spoke_roa_sweep.npz", spoke_values=np.array(spoke_values),
-             RoA_percent_rolling_spokes=RoA_percent_rolling_spokes)
+            RoA_percent_rolling_spokes=RoA_percent_rolling_spokes,
+            inclination_angle=inclination_angle)
 if plot_RoA_spokes:
     data = np.load("data/spoke_roa_sweep.npz")
     spoke_values = data["spoke_values"]
     RoA_percent_rolling_spokes = data["RoA_percent_rolling_spokes"]
+    inclination_angle = data["inclination_angle"]
 
     plt.figure(50)
     ax = plt.gca()
