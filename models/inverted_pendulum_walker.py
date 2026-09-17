@@ -7,18 +7,83 @@ of those functions; it draws a supplied state without advancing the simulation.
 import matplotlib.pyplot as plt
 import numpy as np
 
-
 def generate_params():
-    pass
+    params = {
+    "gravity": 9.81,  # m/s^2
+    "length": 1.0,  # m
+    "mass": 1.0,  # kg
+    "incline": 0.06,  # rad
 
+    "angle_of_attack": np.pi / 7,  # rad
+    "ankle_torque": 0.0,  # N m
+    "torque_gain": 3 #Nm/rad
+    }
+    return params
 
 def dynamics(t, state, params):
-    # TODO: implement the state derivative.
-    return np.array([0.0, 0.0])
+    #calculates state derivative
+    gravity = params["gravity"]
+    length = params["length"]
+    torque = params["ankle_torque"]
+    mass = params["mass"]
 
+    angle = state[0]
+    angular_velocity = state[1]
 
-def event_guard(previous_state, next_state, params):
-    pass
+    angular_acceleration = (gravity * np.sin(angle)) / length + torque/(mass*length**2)
+
+    return np.array([angular_velocity, angular_acceleration])
+
+def impact_guard(state, params):
+    inclination = params["incline"]
+    alpha = params["angle_of_attack"]
+
+    step_impact = False
+    failure = False
+
+    angle = state[0]
+    impact_angle = inclination + alpha
+    failure_angle = inclination - np.pi/2
+
+    if angle >= impact_angle:
+        step_impact = True
+    elif (angle <= failure_angle):
+        failure = True
+
+    return step_impact, failure
+
+def feedback_guard(state, params):
+    mass = params["mass"]
+    length = params["length"]
+    gravity = params["gravity"]
+
+    angle = state[0]
+    velocity = state[1]
+
+    applied_torque = 0
+
+    if False:#(-0.1 < velocity+3.075*angle < 0.1): #in RoA
+        #applied control differs depending on current speed
+        if abs(state[1]) < 0.01:
+            #applied_torque = - (gravity * np.sin(angle)) / length - 2*angle - 1.5*velocity
+            applied_torque = - (gravity * (angle)) / length - 2*angle - 1.5*velocity
+        else:
+            #applied_torque = - (gravity * np.sin(angle)) / length - 3*velocity
+            applied_torque = - (gravity * (angle)) / length - 3*velocity
+
+        torque_min = -0.1*mass*gravity*length
+        torque_max = 0.05*mass*gravity*length
+
+        applied_torque = min(applied_torque, torque_max)
+        applied_torque = max(applied_torque, torque_min)
+
+    return applied_torque
+
+def zero_crossing_guard(previous_state, next_state, step_impact):
+    if previous_state[0]*next_state[0] < 0 and not step_impact:
+        zero_crossed = True
+        print(previous_state[0])
+        return zero_crossed
 
 
 def event_dynamics(state, params):
@@ -27,6 +92,7 @@ def event_dynamics(state, params):
 
 def calculate_energy(state, params):
     pass
+
 
 
 def visualize(
