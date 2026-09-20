@@ -16,7 +16,6 @@ def generate_params():
 
     "angle_of_attack": np.pi / 7,  # rad
     "ankle_torque": 0.0,  # N m
-    "torque_gain": 3 #Nm/rad
     }
     return params
 
@@ -52,23 +51,21 @@ def impact_guard(state, params):
 
     return step_impact, failure
 
-def feedback_guard(state, params):
+def torque_feedback(state, params):
     mass = params["mass"]
     length = params["length"]
     gravity = params["gravity"]
 
     angle = state[0]
     velocity = state[1]
-
+    
     applied_torque = 0
 
-    if False:#(-0.1 < velocity+3.075*angle < 0.1): #in RoA
+    if (-0.05 < velocity+3.025*angle < 0.05): #in RoA
         #applied control differs depending on current speed
-        if abs(state[1]) < 0.01:
-            #applied_torque = - (gravity * np.sin(angle)) / length - 2*angle - 1.5*velocity
-            applied_torque = - (gravity * (angle)) / length - 2*angle - 1.5*velocity
+        if abs(state[1]) < 0.005:
+            applied_torque = - (gravity * (angle)) / length - 2*angle - 2*velocity
         else:
-            #applied_torque = - (gravity * np.sin(angle)) / length - 3*velocity
             applied_torque = - (gravity * (angle)) / length - 3*velocity
 
         torque_min = -0.1*mass*gravity*length
@@ -80,20 +77,43 @@ def feedback_guard(state, params):
     return applied_torque
 
 def zero_crossing_guard(previous_state, next_state, step_impact):
-    if previous_state[0]*next_state[0] < 0 and not step_impact:
+    if  previous_state[0]*next_state[0] < 0 and not step_impact:
         zero_crossed = True
-        print(previous_state[0])
         return zero_crossed
 
+def alpha_feedback(state, alpha_control):
+    velocity = state[1]
 
-def event_dynamics(state, params):
-    pass
+    if velocity >= 0:
+        idx = int(np.searchsorted(alpha_control["velocity_range"], velocity, side="right")) - 1
 
+        if not np.isnan(alpha_control["steps_to_stabilize"][idx]):
+            chosen_m = int(alpha_control["alpha_to_apply"][idx, 0])
+            chosen_alpha = alpha_control["alpha_range"][chosen_m]
 
-def calculate_energy(state, params):
-    pass
+    return chosen_alpha
 
+def break_condition(state, state_traj, params, completed_steps, desired_number_of_steps):
+    inclination = params["incline"]
 
+    angle = state[0]
+    failure_angle = inclination - np.pi/2
+    end_integration = False
+    final_state = ""
+
+    if len(state_traj) % 100 == 0 and len(state_traj) >= 2000:
+        recent_states = np.array(state_traj[-2000:])
+        if (np.all(np.abs(recent_states[:, 1]) < 0.005) and np.all(np.abs(recent_states[:, 0]) < 0.005)):
+            final_state = "stabilized_upright"
+            end_integration = True
+    elif (angle <= failure_angle):
+            final_state = "fell_over"
+            end_integration = True
+    elif desired_number_of_steps is not None and completed_steps == desired_number_of_steps:
+            final_state = "step_limit_reached"
+            end_integration = True
+
+    return end_integration, final_state
 
 def visualize(
     state,
