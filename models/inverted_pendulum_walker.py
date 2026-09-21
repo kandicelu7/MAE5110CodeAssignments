@@ -38,33 +38,29 @@ def impact_guard(state, params):
     alpha = params["angle_of_attack"]
 
     step_impact = False
-    failure = False
 
     angle = state[0]
     impact_angle = inclination + alpha
-    failure_angle = inclination - np.pi/2
 
     if angle >= impact_angle:
         step_impact = True
-    elif (angle <= failure_angle):
-        failure = True
 
-    return step_impact, failure
+    return step_impact
 
-def torque_feedback(state, params):
+def torque_feedback(state, params, torque_activation_limit):
     mass = params["mass"]
     length = params["length"]
     gravity = params["gravity"]
 
     angle = state[0]
     velocity = state[1]
-    
+
     applied_torque = 0
 
-    if (-0.05 < velocity+3.025*angle < 0.05): #in RoA
+    if (-0.1 < velocity+3.025*angle < 0.1) or not torque_activation_limit: #in RoA
         #applied control differs depending on current speed
         if abs(state[1]) < 0.005:
-            applied_torque = - (gravity * (angle)) / length - 2*angle - 2*velocity
+            applied_torque = - (gravity * (angle)) / length - 2.5*angle - 1*velocity
         else:
             applied_torque = - (gravity * (angle)) / length - 3*velocity
 
@@ -99,11 +95,11 @@ def break_condition(state, state_traj, params, completed_steps, desired_number_o
     angle = state[0]
     failure_angle = inclination - np.pi/2
     end_integration = False
-    final_state = ""
+    final_state = "time_limit_reached"
 
-    if len(state_traj) % 100 == 0 and len(state_traj) >= 2000:
-        recent_states = np.array(state_traj[-2000:])
-        if (np.all(np.abs(recent_states[:, 1]) < 0.005) and np.all(np.abs(recent_states[:, 0]) < 0.005)):
+    if len(state_traj) % 100 == 0 and len(state_traj) >= 1000:
+        recent_states = np.array(state_traj[-1000:])
+        if (np.all(np.abs(recent_states[:, 1]) < 0.01) and np.all(np.abs(recent_states[:, 0]) < 0.01)):
             final_state = "stabilized_upright"
             end_integration = True
     elif (angle <= failure_angle):
