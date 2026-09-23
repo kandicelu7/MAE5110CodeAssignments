@@ -12,24 +12,27 @@ from integrators import rk4 as integrator
 output = Path("output/assignment_2")
 output.mkdir(parents=True, exist_ok=True)
 
+roa_file = output / "roa_sweep_results.npz"
+
 fine_timestep = 1e-4
 coarse_timestep = 1e-2
 sim_time = 15
 desired_number_of_steps = 6
 
-simulate_RoA_sweep = 1 #roa map
-return_map = 1
+simulate_RoA_sweep = 0 #roa map
+return_map = 0
 state_action_table = 1
-validate_state_action_table = 1 #checks how accurate predictions are
 
-run_control_simulation = 1 #requires state_action_table to be run once before
-create_animation = 1
+run_control_simulation = 0
+create_animation = 0
 
 params = model.generate_params()
-#params["angle_of_attack"] = np.pi/8
-initial_state = np.array([0, 3])
+params["roa_file"] = roa_file
+params["angle_of_attack"] = np.pi/8
+initial_state = np.array([0, 4])
 
 def full_integration(initial_state, coarse_timestep, fine_timestep, sim_time, desired_number_of_steps, params, torque_activation_limit, alpha_control):
+    #Simulate until system stabilizes, falls, hits a step limit, or runs out of sim_time
 
     time_traj = [0.0]
     state_traj = [initial_state]
@@ -84,6 +87,7 @@ def full_integration(initial_state, coarse_timestep, fine_timestep, sim_time, de
     return time_traj, state_traj, torque_traj, final_state, completed_steps, velocity_tracker
 
 def find_velocity_index(velocity, velocity_range):
+    #finds index of the velocity_range entry closest to input velocity
     if not np.isfinite(velocity):
         return -1
 
@@ -91,17 +95,8 @@ def find_velocity_index(velocity, velocity_range):
     if velocity < velocity_range[0] - dv / 2 or velocity > velocity_range[-1] + dv / 2:
         return -1                                   # outside the table
 
-    idx = int(np.searchsorted(velocity_range, velocity, side="left"))
-
-    if idx <= 0:
-        return 0
-    if idx >= len(velocity_range):
-        return len(velocity_range) - 1
-
-    if abs(velocity_range[idx] - velocity) < abs(velocity - velocity_range[idx - 1]):
-        return idx
-    else:
-        return idx - 1
+    idx = int(round((velocity - velocity_range[0]) / dv))
+    return min(max(idx, 0), len(velocity_range) - 1)
 
 if return_map:
     inclination = params["incline"]
@@ -111,14 +106,15 @@ if return_map:
     poincare_y = []  #v_k+1
 
     initial_conditions = []
-    print("")
     for v0 in velocity_magnitudes:
         initial_state_sweep = np.array([-0.001, v0])
         sweep_params = model.generate_params()
+        sweep_params["roa_file"] = roa_file
 
         _, _, _, final_state, _, velocity_tracker = full_integration(initial_state_sweep, coarse_timestep, fine_timestep, sim_time, None, sweep_params, True, None)
 
         if final_state == "stabilized_upright" and len(velocity_tracker) == 1:
+            #marks next velocity as zero if it stabilizes
             poincare_x.append(velocity_tracker[0])
             poincare_y.append(0)
             continue
@@ -142,57 +138,57 @@ if return_map:
     plt.savefig("output/assignment_2/return_map_plot.png")
 
 if simulate_RoA_sweep:
-    RoA_grid_points = 100
+
+    RoA_grid_points = 50
     angle_range = np.linspace(-0.3, 0.3, RoA_grid_points)
     velocity_range = np.linspace(-.75, 0.75, RoA_grid_points)
 
-    result_categories = [
-        "stabilized_upright",
-        "fell_over",
-        "step_limit_reached"]
+    result_categories = ["stabilized_upright", "fell_over", "step_limit_reached"]
     category_codes = {name: idx for idx, name in enumerate(result_categories)}
     sweep_results = np.zeros((RoA_grid_points, RoA_grid_points))
 
     print("sweeping RoA")
-    for i, angle0 in enumerate(angle_range):
+    for i, angle0 in enumerate(angle_range): #sweep ICs to see if they stabilize
         for j, velocity0 in enumerate(velocity_range):
             sweep_params = model.generate_params()
             initial_state_sweep = [angle0, velocity0]
 
-            _, state_traj_sweep, _, final_state, _, _ = full_integration(initial_state_sweep, coarse_timestep, fine_timestep, sim_time, 1, sweep_params, True, None)
+            _, state_traj_sweep, _, final_state, _, _ = full_integration(
+                initial_state_sweep, coarse_timestep, fine_timestep, sim_time, 1, sweep_params, False, None)
 
             sweep_results[j, i] = category_codes[final_state]
 
         print(f"  row {i + 1}/{RoA_grid_points} done")
+
+    #save results so the torque controller can refer to it
+    np.savez(roa_file, angle_range=angle_range, velocity_range=velocity_range, sweep_results=sweep_results, category_codes=category_codes)
 
     cmap = plt.get_cmap("Blues", len(result_categories))
     fig, ax = plt.subplots(figsize=(6, 5), layout="constrained")
     mesh = ax.pcolormesh(angle_range, velocity_range, sweep_results, cmap=cmap, vmin=-0.5, vmax=len(result_categories) - 0.5, shading="nearest")
     cbar = fig.colorbar(mesh, ax=ax, ticks=range(len(result_categories)))
     cbar.ax.set_yticklabels(["Stabilizes upright", "Falls backwards", "Takes another step"])
-    ax.set( xlabel=r"$\theta_0$ (rad)", ylabel=r"$\dot\theta_0$ (rad/s)")
+    ax.set(xlabel=r"$\theta_0$ (rad)", ylabel=r"$\dot\theta_0$ (rad/s)")
     ax.set_title("Ankle controller region of attraction")
-
     fig.savefig(output / "roa_sweep.png", dpi=150)
 
 if state_action_table:
     params_copy = model.generate_params()
-
     mass = params_copy["mass"]
     length = params_copy["length"]
     gravity = params_copy["gravity"]
 
-    grid_points = 75
-
+    grid_points = 70
     velocity_range = np.linspace(0,np.sqrt(2*gravity/length), grid_points)
     alpha_range = np.linspace(np.pi/8, np.pi/7, grid_points)
 
-    policy_path = output / "state_action_policy.npz"
+    state_action_controller = output / "state_action_control.npz"
 
     steps_to_stabilize = np.full((grid_points), np.nan)
     alpha_to_apply = np.full((grid_points, grid_points), -1)
 
     def state_action_sweep(velocity_range, alpha_range, coarse_timestep, fine_timestep, sim_time):
+        #sweeps velocity and angle pairs to see next state velocity
         steps_grid = np.zeros((grid_points, grid_points), dtype=bool)
         velocity_next = np.full((grid_points, grid_points), np.nan)
 
@@ -202,10 +198,11 @@ if state_action_table:
                 initial_state = [0, v0]
                 params_copy = model.generate_params()
                 params_copy["angle_of_attack"] = alpha
+                params_copy["roa_file"] = roa_file
 
                 _,_,_, final_state, completed_steps, velocity_tracker = full_integration(initial_state, coarse_timestep, fine_timestep, sim_time, 2, params_copy, True, None)
 
-                if final_state == "stabilized_upright":
+                if final_state == "stabilized_upright": #note pairs stabilizing in 0/1 steps
                     if completed_steps == 0:
                         steps_to_stabilize[v] = 0
                     elif completed_steps == 1:
@@ -215,7 +212,7 @@ if state_action_table:
                     velocity_next[v,a] = velocity_tracker[0]
         return steps_grid, velocity_next
 
-    def safest_alpha(indices): #alpha in middle of potential angles
+    def find_safest_alpha(indices): #alpha in middle of potential angles
         indices = sorted(indices)
         best_start = best_len = 0
         run_start = 0
@@ -236,7 +233,7 @@ if state_action_table:
         if np.isnan(steps_to_stabilize[v]) and np.any(steps_grid[v] == 1):
             steps_to_stabilize[v] = 1
             working_a = np.where(steps_grid[v])[0]
-            alpha_to_apply[v] = safest_alpha(working_a)
+            alpha_to_apply[v] = find_safest_alpha(working_a)
 
     #map next velocity points to grid
     next_index = np.full((grid_points, grid_points), -1) #initialize with -1 being and invalid index
@@ -245,7 +242,7 @@ if state_action_table:
             next_index[v, a] = find_velocity_index(velocity_next[v, a], velocity_range) #maps each output velocity to an input velocity
 
     steps = 2
-    while True:
+    while True: #loop through velocity/angles to check if they can reach a solved state
         prev_steps_to_stabilize = steps_to_stabilize
         states_added = False
         updates = {}
@@ -265,7 +262,7 @@ if state_action_table:
                 downstream_steps = [prev_steps_to_stabilize[next_index[v, a2]] for a2 in working_alphas]
                 min_downstream = min(downstream_steps)
                 best_tier = [a2 for a2, s in zip(working_alphas, downstream_steps) if s == min_downstream]
-                best_a = safest_alpha(best_tier)
+                best_a = find_safest_alpha(best_tier)
                 updates[v] = (min_downstream + 1, best_a)
                 states_added = True
 
@@ -277,21 +274,17 @@ if state_action_table:
             break
         steps += 1
 
-    np.savez(policy_path, velocity_range=velocity_range, alpha_range=alpha_range,
+    np.savez(state_action_controller, velocity_range=velocity_range, alpha_range=alpha_range,
                 steps_to_stabilize=steps_to_stabilize,
                 alpha_to_apply=alpha_to_apply, steps_grid=steps_grid, next_index=next_index)
 
     reachable = ~np.isnan(steps_to_stabilize)
-
     unique_steps, counts = np.unique(steps_to_stabilize[reachable], return_counts=True)
     total_states = grid_points
     unreachable_count = total_states - int(np.sum(counts))
-
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=True, layout="constrained")
-
     sc = ax1.scatter(velocity_range[reachable], steps_to_stabilize[reachable],
                     c=steps_to_stabilize[reachable], cmap="viridis", s=30)
-
     if np.any(~reachable):
         ax1.scatter(velocity_range[~reachable], np.zeros(np.sum(~reachable)) - 1,
                     marker="x", color="red", label="never reaches standing")
@@ -325,6 +318,7 @@ if state_action_table:
 
     plt.savefig(output / "state_action_lookup.png")
 
+    #full heatmap
     per_action_steps = np.full((grid_points, grid_points), np.nan)
 
     for v in range(grid_points):
@@ -336,7 +330,6 @@ if state_action_table:
                 if k >= 0 and not np.isnan(steps_to_stabilize[k]):
                     per_action_steps[v, a] = steps_to_stabilize[k] + 1
 
-
     reachable = ~np.isnan(steps_to_stabilize)
     total_states = grid_points
 
@@ -344,18 +337,9 @@ if state_action_table:
         steps_to_stabilize[reachable].astype(int),
         return_counts=True)
 
-    print(f"\n--- minimum stabilization steps by state ({total_states} states) ---")
 
-    for step_val, count in zip(unique_steps, counts):
-        pct = 100 * count / total_states
-        print(f"  {step_val}-step: {pct:.2f}% ({count}/{total_states})")
-
-    # States for which no action sequence was found
     unreachable_count = total_states - int(np.sum(counts))
     pct_unreachable = 100 * unreachable_count / total_states
-
-    print(f"  unreachable: {pct_unreachable:.2f}% "
-          f"({unreachable_count}/{total_states})")
 
     masked_steps = np.ma.masked_invalid(per_action_steps)
 
@@ -385,11 +369,50 @@ if state_action_table:
 
     plt.savefig(output / "state_action_heatmap.png")
 
-if run_control_simulation:
-    policy_sim_params = model.generate_params()
-    policy_path = output / "state_action_policy.npz"
+    #validate results against simulations ---
+    alpha_control = {
+        "velocity_range": velocity_range,
+        "alpha_range": alpha_range,
+        "steps_to_stabilize": steps_to_stabilize,
+        "alpha_to_apply": alpha_to_apply,
+    }
 
-    cached = np.load(policy_path)
+    n_test = 17
+    test_velocity_range = np.linspace(0.25, 4.25, n_test)
+    match = np.zeros(n_test, dtype=bool)
+
+    for i, v0 in enumerate(test_velocity_range):
+        table_idx = find_velocity_index(v0, velocity_range)
+        predicted = steps_to_stabilize[table_idx] if table_idx >= 0 else np.nan
+
+        initial_state = [0, v0]
+        sim_params = model.generate_params()
+        sim_params["roa_file"] = roa_file
+
+        if table_idx >= 0 and not np.isnan(alpha_to_apply[table_idx, 0]):
+            chosen_m = int(alpha_to_apply[table_idx, 0])
+            sim_params["angle_of_attack"] = alpha_range[chosen_m]
+
+        (_, _, _, final_state, completed_steps, _) = full_integration(
+            initial_state, coarse_timestep, fine_timestep, sim_time,
+            None, sim_params, True, alpha_control
+        )
+
+        if final_state == "stabilized_upright":
+            match[i] = (not np.isnan(predicted)) and (completed_steps == predicted)
+        else:
+            match[i] = np.isnan(predicted)  # both agree: never stabilizes
+
+    n_match = int(np.sum(match))
+    print(f"Correct step counts: {n_match}/{n_test} ({100 * n_match / n_test:.2f}%)")
+
+if run_control_simulation:
+    # Run a single simulation using angle controller
+    policy_sim_params = model.generate_params()
+    policy_sim_params["roa_file"] = roa_file
+    state_action_controller = output / "state_action_control.npz"
+
+    cached = np.load(state_action_controller)
     alpha_control = {
         "velocity_range": cached["velocity_range"],
         "alpha_range": cached["alpha_range"],
@@ -415,6 +438,7 @@ if run_control_simulation:
 
     plt.savefig(output / "simulation.png")
 else:
+    # Run a single simulation with no angle control
     (time_traj, state_traj, torque_traj, final_state, completed_steps, velocity_tracker) = full_integration(initial_state, coarse_timestep, fine_timestep, sim_time, None, params, True, None)
     fig, (ax1) = plt.subplots(1, 1, figsize=(8, 6), sharex=True, layout="constrained")
     ax1.plot(time_traj, state_traj[0], label=r"$\theta$")
@@ -429,73 +453,12 @@ else:
 
 print(f"final_state={final_state}, footstrikes={completed_steps}")
 
-if validate_state_action_table:
-
-    policy_path = output / "state_action_policy.npz"
-
-    cached = np.load(policy_path)
-    velocity_range   = cached["velocity_range"]
-    alpha_range      = cached["alpha_range"]
-    steps_to_stabilize = cached["steps_to_stabilize"]
-    alpha_to_apply     = cached["alpha_to_apply"]
-
-    alpha_control = {
-        "velocity_range": velocity_range,
-        "alpha_range": alpha_range,
-        "steps_to_stabilize": steps_to_stabilize,
-        "alpha_to_apply": alpha_to_apply,
-    }
-
-    params_copy = model.generate_params()
-    mass, length, gravity = params_copy["mass"], params_copy["length"], params_copy["gravity"]
-
-    n_test = 17
-    test_velocity_range = np.linspace(0.25, 4.25, 17)
-
-    predicted_steps = np.full(n_test, np.nan)
-    actual_steps    = np.full(n_test, np.nan)
-    actual_final    = np.empty(n_test, dtype=object)
-    match           = np.zeros(n_test, dtype=bool)
-
-    for i, v0 in enumerate(test_velocity_range):
-        # look up what the table predicts for this velocity
-        table_idx = find_velocity_index(v0, velocity_range)
-        predicted = steps_to_stabilize[table_idx] if table_idx >= 0 else np.nan
-        predicted_steps[i] = predicted
-
-        # actually simulate this velocity under the policy
-        initial_state = [0, v0]
-        sim_params = model.generate_params()
-
-        if table_idx >= 0 and not np.isnan(alpha_to_apply[table_idx, 0]):
-            chosen_m = int(alpha_to_apply[table_idx, 0])
-            sim_params["angle_of_attack"] = alpha_range[chosen_m]
-
-        (_, _, _, final_state, completed_steps, velocity_tracker) = full_integration(
-            initial_state, coarse_timestep, fine_timestep, sim_time,
-            None, sim_params, True, alpha_control
-        )
-        actual_final[i] = final_state
-
-        if final_state == "stabilized_upright":
-            actual_steps[i] = completed_steps
-            match[i] = (not np.isnan(predicted)) and (completed_steps == predicted)
-        else:
-            match[i] = np.isnan(predicted)  # both agree: never stabilizes
-
-        pred_str = "nan" if np.isnan(predicted) else f"{predicted:.0f}"
-        act_str  = "nan" if np.isnan(actual_steps[i]) else f"{actual_steps[i]:.0f}"
-
-    n_match = int(np.sum(match))
-    print(f"Correct step counts: {n_match}/{n_test} ({100 * n_match / n_test:.2f}%)")
-
 if create_animation:
     print("animating")
 
     fig, ax = plt.subplots(figsize=(8, 5), layout="constrained")
 
     def draw_frame(index):
-        # The massless swing leg is repositioned instantaneously at each impact.
         params["ankle_torque"] = torque_traj[index]
         model.visualize(state_traj[:, index], params, ax=ax)
         ax.set_title(f"t = {time_traj[index]:.2f} s")

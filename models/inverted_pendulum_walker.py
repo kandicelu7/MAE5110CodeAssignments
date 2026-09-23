@@ -34,6 +34,7 @@ def dynamics(t, state, params):
     return np.array([angular_velocity, angular_acceleration])
 
 def impact_guard(state, params):
+    #checks for step impact
     inclination = params["incline"]
     alpha = params["angle_of_attack"]
 
@@ -51,21 +52,63 @@ def torque_feedback(state, params, torque_activation_limit):
     mass = params["mass"]
     length = params["length"]
     gravity = params["gravity"]
+    roa_file = params.get("roa_file")
 
     angle = state[0]
     velocity = state[1]
 
     applied_torque = 0
 
-    if (-0.1 < velocity+3.025*angle < 0.1) or not torque_activation_limit: #in RoA
-        #applied control differs depending on current speed
-        if abs(state[1]) < 0.005:
-            applied_torque = - (gravity * (angle)) / length - 2.5*angle - 1*velocity
-        else:
-            applied_torque = - (gravity * (angle)) / length - 3*velocity
+    in_roa = True  # default when no RoA check is requested or possible
+    if torque_activation_limit and roa_file is not None:
+        if not hasattr(torque_feedback, "_roa_cache_file") or torque_feedback._roa_cache_file != roa_file:
+            try:
+                data = np.load(roa_file, allow_pickle=True)
+            except FileNotFoundError:
+                # RoA sweep hasn't been run yet -- ignore and fall back to ungated
+                torque_feedback._roa_cache_file = roa_file
+                torque_feedback._angle_range = None
+                data = None
 
-        torque_min = -0.1*mass*gravity*length
-        torque_max = 0.05*mass*gravity*length
+            if data is not None:
+                angle_range = data["angle_range"]
+                velocity_range = data["velocity_range"]
+                sweep_results = data["sweep_results"]
+                category_codes = data["category_codes"].item()
+
+                stabilized_code = category_codes["stabilized_upright"]
+
+                torque_feedback._angle_range = angle_range
+                torque_feedback._velocity_range = velocity_range
+                torque_feedback._in_roa_grid = (sweep_results == stabilized_code) 
+                torque_feedback._roa_cache_file = roa_file
+
+        if torque_feedback._angle_range is not None:
+            angle_range = torque_feedback._angle_range
+            velocity_range = torque_feedback._velocity_range
+            in_roa_grid = torque_feedback._in_roa_grid
+
+            # nearest-index lookup on a uniform grid (clamped to array bounds)
+            angle_step = angle_range[1] - angle_range[0]
+            velocity_step = velocity_range[1] - velocity_range[0]
+
+            i = round((angle - angle_range[0]) / angle_step)
+            j = round((velocity - velocity_range[0]) / velocity_step)
+
+            i = min(max(i, 0), len(angle_range) - 1)
+            j = min(max(j, 0), len(velocity_range) - 1)
+
+            in_roa = bool(in_roa_grid[j, i])
+
+    if not torque_activation_limit or in_roa:
+        # applied control differs depending on current speed
+        if abs(state[1]) < 0.01:
+            applied_torque = - (gravity * np.sin(angle)) / length - 2.5 * angle - 1 * velocity
+        else:
+            applied_torque = - (gravity * np.sin(angle)) / length - 3 * velocity
+
+        torque_min = -0.1 * mass * gravity * length
+        torque_max = 0.05 * mass * gravity * length
 
         applied_torque = min(applied_torque, torque_max)
         applied_torque = max(applied_torque, torque_min)
@@ -73,6 +116,7 @@ def torque_feedback(state, params, torque_activation_limit):
     return applied_torque
 
 def zero_crossing_guard(previous_state, next_state, step_impact):
+    #checks if theta=0 was crossed
     if  previous_state[0]*next_state[0] < 0 and not step_impact:
         zero_crossed = True
         return zero_crossed
@@ -80,6 +124,7 @@ def zero_crossing_guard(previous_state, next_state, step_impact):
 def alpha_feedback(state, alpha_control):
     velocity = state[1]
 
+    chosen_alpha = np.pi/8 #default to smallest angle
     if velocity >= 0:
         idx = int(np.searchsorted(alpha_control["velocity_range"], velocity, side="right")) - 1
 
@@ -97,7 +142,7 @@ def break_condition(state, state_traj, params, completed_steps, desired_number_o
     end_integration = False
     final_state = "time_limit_reached"
 
-    if len(state_traj) % 100 == 0 and len(state_traj) >= 1000:
+    if len(state_traj) % 100 == 0 and len(state_traj) >= 1500:
         recent_states = np.array(state_traj[-1000:])
         if (np.all(np.abs(recent_states[:, 1]) < 0.01) and np.all(np.abs(recent_states[:, 0]) < 0.01)):
             final_state = "stabilized_upright"
