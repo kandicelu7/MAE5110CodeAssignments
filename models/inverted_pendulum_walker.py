@@ -1,0 +1,322 @@
+"""InvertedPendulumWalker starter model, with visualization provided.
+
+Implement the model functions for Assignment 2. The visualizer works independently
+of those functions; it draws a supplied state without advancing the simulation.
+"""
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def generate_params():
+    params = {
+    "gravity": 9.81,  # m/s^2
+    "length": 1.0,  # m
+    "mass": 1.0,  # kg
+    "incline": 0.06,  # rad
+
+    "angle_of_attack": np.pi / 7,  # rad
+    "ankle_torque": 0.0,  # N m
+    }
+    return params
+
+def dynamics(t, state, params):
+    #calculates state derivative
+    gravity = params["gravity"]
+    length = params["length"]
+    torque = params["ankle_torque"]
+    mass = params["mass"]
+
+    angle = state[0]
+    angular_velocity = state[1]
+
+    angular_acceleration = (gravity * np.sin(angle)) / length + torque/(mass*length**2)
+
+    return np.array([angular_velocity, angular_acceleration])
+
+def impact_guard(state, params):
+    #checks for step impact
+    inclination = params["incline"]
+    alpha = params["angle_of_attack"]
+
+    step_impact = False
+
+    angle = state[0]
+    impact_angle = inclination + alpha
+
+    if angle >= impact_angle:
+        step_impact = True
+
+    return step_impact
+
+def torque_feedback(state, params, torque_activation_limit):
+    mass = params["mass"]
+    length = params["length"]
+    gravity = params["gravity"]
+    roa_file = params.get("roa_file")
+
+    angle = state[0]
+    velocity = state[1]
+
+    applied_torque = 0
+
+    in_roa = True  # default when no RoA check is requested or possible
+    if torque_activation_limit and roa_file is not None:
+        if not hasattr(torque_feedback, "_roa_cache_file") or torque_feedback._roa_cache_file != roa_file:
+            try:
+                data = np.load(roa_file, allow_pickle=True)
+            except FileNotFoundError:
+                # RoA sweep hasn't been run yet -- ignore and fall back to ungated
+                torque_feedback._roa_cache_file = roa_file
+                torque_feedback._angle_range = None
+                data = None
+
+            if data is not None:
+                angle_range = data["angle_range"]
+                velocity_range = data["velocity_range"]
+                sweep_results = data["sweep_results"]
+                category_codes = data["category_codes"].item()
+
+                stabilized_code = category_codes["stabilized_upright"]
+
+                torque_feedback._angle_range = angle_range
+                torque_feedback._velocity_range = velocity_range
+                torque_feedback._in_roa_grid = (sweep_results == stabilized_code) 
+                torque_feedback._roa_cache_file = roa_file
+
+        if torque_feedback._angle_range is not None:
+            angle_range = torque_feedback._angle_range
+            velocity_range = torque_feedback._velocity_range
+            in_roa_grid = torque_feedback._in_roa_grid
+
+            # nearest-index lookup on a uniform grid (clamped to array bounds)
+            angle_step = angle_range[1] - angle_range[0]
+            velocity_step = velocity_range[1] - velocity_range[0]
+
+            i = round((angle - angle_range[0]) / angle_step)
+            j = round((velocity - velocity_range[0]) / velocity_step)
+
+            i = min(max(i, 0), len(angle_range) - 1)
+            j = min(max(j, 0), len(velocity_range) - 1)
+
+            in_roa = bool(in_roa_grid[j, i])
+
+    if not torque_activation_limit or in_roa:
+        # applied control differs depending on current speed
+        if abs(state[1]) < 0.01:
+            applied_torque = - (gravity * np.sin(angle)) / length - 2.5 * angle - 1 * velocity
+        else:
+            applied_torque = - (gravity * np.sin(angle)) / length - 3 * velocity
+
+        torque_min = -0.1 * mass * gravity * length
+        torque_max = 0.05 * mass * gravity * length
+
+        applied_torque = min(applied_torque, torque_max)
+        applied_torque = max(applied_torque, torque_min)
+
+    return applied_torque
+
+def zero_crossing_guard(previous_state, next_state, step_impact):
+    #checks if theta=0 was crossed
+    if  previous_state[0]*next_state[0] < 0 and not step_impact:
+        zero_crossed = True
+        return zero_crossed
+
+def alpha_feedback(state, alpha_control):
+    velocity = state[1]
+
+    chosen_alpha = np.pi/8 #default to smallest angle
+    if velocity >= 0:
+        idx = int(np.searchsorted(alpha_control["velocity_range"], velocity, side="right")) - 1
+
+        if not np.isnan(alpha_control["steps_to_stabilize"][idx]):
+            chosen_m = int(alpha_control["alpha_to_apply"][idx, 0])
+            chosen_alpha = alpha_control["alpha_range"][chosen_m]
+
+    return chosen_alpha
+
+def break_condition(state, state_traj, params, completed_steps, desired_number_of_steps):
+    inclination = params["incline"]
+
+    angle = state[0]
+    failure_angle = inclination - np.pi/2
+    end_integration = False
+    final_state = "time_limit_reached"
+
+    if len(state_traj) % 100 == 0 and len(state_traj) >= 1500:
+        recent_states = np.array(state_traj[-1000:])
+        if (np.all(np.abs(recent_states[:, 1]) < 0.01) and np.all(np.abs(recent_states[:, 0]) < 0.01)):
+            final_state = "stabilized_upright"
+            end_integration = True
+    elif (angle <= failure_angle):
+            final_state = "fell_over"
+            end_integration = True
+    elif desired_number_of_steps is not None and completed_steps == desired_number_of_steps:
+            final_state = "step_limit_reached"
+            end_integration = True
+
+    return end_integration, final_state
+
+def visualize(
+    state,
+    params,
+    ax=None,
+    *,
+    show_swing=True,
+    stance_position=(0.0, 0.0),
+    view_limits=None,
+):
+    """Draw one walker pose and return a Matplotlib Axes.
+
+    Parameters
+    ----------
+    state : array-like, shape (2,)
+        [theta, angular_velocity], in radians and radians/second. Theta is
+        measured clockwise from upward vertical; positive x points right.
+    params : dict
+        ``length`` is the leg length in meters. ``incline`` is the ground's
+        downhill slope angle in radians (positive slopes descend to the right).
+        ``angle_of_attack`` is HALF the angle between the stance and forward swing
+        legs, in radians; it is needed only when show_swing=True.
+        ``ankle_torque`` (optional, default 0) is displayed in N m, with positive
+        torque acting in the positive theta direction. Other keys are ignored.
+    ax : matplotlib.axes.Axes, optional
+        Axes to clear and reuse. If omitted, create a figure. This function
+        neither shows nor saves it: use plt.show() or ax.figure.savefig(...).
+    show_swing : bool
+        Draw a straight forward swing leg at the supplied angle_of_attack. Set False
+        while the swing leg is held clear or while balancing. Swing motion is
+        not part of the two-state model and is not inferred from theta.
+    stance_position : pair of floats
+        Current stance foot's (x, y) in meters, default (0, 0). The two-state
+        model does not track translation; supply foot positions if desired.
+        Ground passes through this point at the supplied incline.
+    view_limits : (xmin, xmax, ymin, ymax), optional
+        Fixed camera bounds in meters. By default the view follows the stance
+        foot with bounds that fit both legs at any angle. Supply the same bounds
+        each frame for a stationary world view.
+
+    Notes
+    -----
+    Draws the supplied pose; contact events belong in the simulation.
+    Reuse ax for frame sequences; use evenly spaced simulation times for playback
+    at a fixed frame rate, and pass the parameters actually used at each frame.
+    """
+    state = np.asarray(state, dtype=float)
+    foot = np.asarray(stance_position, dtype=float)
+    if state.shape != (2,) or not np.all(np.isfinite(state)):
+        raise ValueError("state must contain two finite values: [theta, velocity].")
+    if foot.shape != (2,) or not np.all(np.isfinite(foot)):
+        raise ValueError("stance_position must contain two finite values: [x, y].")
+    length = float(params["length"])
+    incline = float(params["incline"])
+    torque = float(params.get("ankle_torque", 0.0))
+    if not np.isfinite(length) or length <= 0:
+        raise ValueError("length must be finite and positive.")
+    if not np.isfinite(incline) or abs(incline) >= np.pi / 2:
+        raise ValueError("incline must be finite and between -pi/2 and pi/2.")
+    if not np.isfinite(torque):
+        raise ValueError("ankle_torque must be finite.")
+    if show_swing:
+        angle_of_attack = float(params["angle_of_attack"])
+        if not np.isfinite(angle_of_attack):
+            raise ValueError("angle_of_attack must be finite.")
+
+    if view_limits is None:
+        radius = 2.15 * length
+        view_limits = (
+            foot[0] - radius,
+            foot[0] + radius,
+            foot[1] - radius,
+            foot[1] + radius,
+        )
+    limits = np.asarray(view_limits, dtype=float)
+    if (
+        limits.shape != (4,)
+        or not np.all(np.isfinite(limits))
+        or limits[0] >= limits[1]
+        or limits[2] >= limits[3]
+    ):
+        raise ValueError(
+            "view_limits must be (xmin, xmax, ymin, ymax) with increasing bounds."
+        )
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6), layout="constrained")
+    ax.clear()
+    theta, angular_velocity = state
+    hub = foot + length * np.array([np.sin(theta), np.cos(theta)])
+
+    ground_x = np.array(limits[:2])
+    ground_y = foot[1] - np.tan(incline) * (ground_x - foot[0])
+    ax.fill_between(ground_x, ground_y, limits[2], color="#eee7dc", zorder=0)
+    ax.plot(ground_x, ground_y, color="#7b6651", linewidth=2, label="Ground")
+    ax.plot(
+        [foot[0], foot[0]],
+        [foot[1], foot[1] + 1.25 * length],
+        ":",
+        color="0.7",
+        linewidth=1,
+        label="Vertical",
+    )
+
+    if show_swing:
+        swing_angle = theta - 2 * angle_of_attack
+        swing_foot = hub - length * np.array([np.sin(swing_angle), np.cos(swing_angle)])
+        swing_color = "#df8a25"
+        ax.plot(
+            [hub[0], swing_foot[0]],
+            [hub[1], swing_foot[1]],
+            "--",
+            color=swing_color,
+            linewidth=2.5,
+            label="Swing leg",
+            zorder=3,
+        )
+        ax.plot(
+            *swing_foot,
+            "o",
+            color=swing_color,
+            markersize=7,
+            zorder=4,
+            label="Swing foot",
+        )
+
+    stance_color = "#23699b"
+    ax.plot(
+        [foot[0], hub[0]],
+        [foot[1], hub[1]],
+        color=stance_color,
+        linewidth=4,
+        label="Stance leg",
+        zorder=4,
+    )
+    ax.plot(*foot, "s", color="#333333", markersize=8, zorder=5, label="Stance foot")
+    ax.plot(
+        *hub,
+        "o",
+        color=stance_color,
+        markeredgecolor="white",
+        markersize=17,
+        zorder=6,
+        label="Hub",
+    )
+    ax.text(
+        0.03,
+        0.97,
+        f"$\\theta$ = {theta:.3f} rad\n"
+        f"$\\dot\\theta$ = {angular_velocity:.3f} rad/s\n"
+        f"$\\tau$ = {torque:.3f} N m",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=10,
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85},
+    )
+    ax.set(
+        xlim=limits[:2],
+        ylim=limits[2:],
+        xlabel="x (m)",
+        ylabel="y (m)",
+        title="Inverted pendulum walker",
+    )
+    ax.set_aspect("equal", adjustable="box")
+    return ax
