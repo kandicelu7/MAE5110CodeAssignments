@@ -54,7 +54,7 @@ def full_integration(initial_state, coarse_timestep, fine_timestep, sim_time, de
         #refines timestep when needed
         timestep = fine_timestep if state[0]-impact_angle > 0.01 or abs(state[0]) < 0.01 else coarse_timestep
 
-        next_state = integrator.integrate_step(model, state, t, timestep, params)
+        next_state = integrator.integrate_step(model.dynamics, t, state, timestep, params)
         t += timestep
 
         step_impact = model.impact_guard(next_state, params) #check if impact or failure happened
