@@ -5,7 +5,7 @@
 # straight down and balances it at the upright position, then tests that policy
 # on the continuous pendulum dynamics.
 #
-# The motor torque is limited to 7 N m, which is not enough to lift the pendulum
+# The motor torque is limited to 7 Nm, which is not enough to lift the pendulum
 # directly. The controller has to optimally to pump energy into the swing before it
 # can stabilize the pendulum at the top.
 

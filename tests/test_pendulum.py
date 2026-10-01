@@ -7,9 +7,9 @@ timestep = 0.01
 steps = 100
 step = integrators.rk4
 
-initial_state = [0.5, 0]
+initial_state = [0.3, 0]
 
-def simulate(params, state):
+def simulate(params, state): #simulate for 100 steps
     states = [np.asarray(state, dtype=float)]
     for k in range(steps):
         states.append(step(pendulum.dynamics, k * timestep, states[-1], timestep, params))
@@ -18,7 +18,7 @@ def simulate(params, state):
     kinetic, potential = pendulum.calculate_energy(states.T, params)
     return states, kinetic + potential
 
-def set_params(damping, torque):
+def set_params(damping, torque): #modify torque/damping as needed
     params = pendulum.generate_params()
     params["damping_coeff"] = damping
     params["torque"] = torque
