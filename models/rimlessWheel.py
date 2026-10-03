@@ -113,7 +113,7 @@ def full_integration(model, initial_state, coarse_timestep, fine_timestep, impac
         timestep = fine_timestep if dist_to_impact < impact_threshold and state[1] > 0.05 else coarse_timestep
 
         #integrate one step
-        state_main = integrator.integrate_step(model.dynamics, t, state[:2], timestep, params)
+        state_main = integrator(model.dynamics, t, state[:2], timestep, params)
         state = np.concatenate([state_main, state[2:]])
 
         state, tracker = model.detect_event(state, params, tracker)       #checks for impact, rewrites state if so

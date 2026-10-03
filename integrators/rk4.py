@@ -1,7 +1,7 @@
 #integrates one step with rk4
 import numpy as np
 
-def integrate_step(dynamics, t, state, timestep, params):
+def rk4(dynamics, t, state, timestep, params):
 
     k1 = dynamics(t,              state,                  params)
     k2 = dynamics(t + timestep/2, state+ timestep * k1/2, params)
