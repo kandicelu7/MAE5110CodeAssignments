@@ -1,6 +1,18 @@
 import numpy as np
 from integrators import rk4 as integrator
 
+def generate_params():
+    return {
+        "mass": 1.0,
+        "length": 1.0,
+        "gravity": 9.81,
+        "spoke_number": 6,
+        "inclination_angle": np.pi / 10,
+    }
+
+def generate_initial_condition():
+    return np.array([np.pi / 6, 0.0])
+
 def dynamics(t, state, params):
     #calculates state derivative
     gravity = params["gravity"]
@@ -101,7 +113,7 @@ def full_integration(model, initial_state, coarse_timestep, fine_timestep, impac
         timestep = fine_timestep if dist_to_impact < impact_threshold and state[1] > 0.05 else coarse_timestep
 
         #integrate one step
-        state_main = integrator.integrate_step(model, state[:2], t, timestep, params)
+        state_main = integrator(model.dynamics, t, state[:2], timestep, params)
         state = np.concatenate([state_main, state[2:]])
 
         state, tracker = model.detect_event(state, params, tracker)       #checks for impact, rewrites state if so

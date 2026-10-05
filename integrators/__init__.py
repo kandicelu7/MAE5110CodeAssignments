@@ -1,5 +1,5 @@
 # For more about init files, see https://realpython.com/python-init-py/
 # and https://medium.com/data-science/whats-init-for-me-d70a312da583
-from . import rk4
+from .rk4 import rk4
 
 __all__ = ["rk4"]
